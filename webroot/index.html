@@ -98,6 +98,7 @@
       rate: document.getElementById('rate'), current: document.getElementById('current'), auto: document.getElementById('auto'), rates: document.getElementById('rates'), message: document.getElementById('message'), apply: document.getElementById('apply'), reload: document.getElementById('reload'), search: document.getElementById('app-search'), list: document.getElementById('app-list'), count: document.getElementById('selection-count'), saveApps: document.getElementById('save-apps')
     };
     const appState = { all: [], selected: new Set() };
+    let loadSequence = 0;
     const parse = text => Object.fromEntries(String(text).trim().split(/\r?\n/).filter(line => line.includes('=')).map(line => { const i = line.indexOf('='); return [line.slice(0, i), line.slice(i + 1)]; }));
     const show = (text, error = false) => { els.message.textContent = text; els.message.className = error ? 'error' : ''; };
     const shortName = packageName => packageName.split('.').pop() || packageName;
@@ -161,22 +162,43 @@
     }
 
     async function load() {
-      els.rate.disabled = true; els.apply.disabled = true; els.saveApps.disabled = true; show('读取中…');
+      const sequence = ++loadSequence;
+      els.rate.disabled = true; els.apply.disabled = true; els.saveApps.disabled = true; els.reload.disabled = true;
+      els.list.replaceChildren();
+      const loading = document.createElement('div');
+      loading.className = 'empty';
+      loading.textContent = '正在加载应用列表…';
+      els.list.append(loading);
+      show('读取刷新率…');
       try {
-        const [stateText, appsText] = await Promise.all([run('status'), run('apps')]);
-        const state = parse(stateText);
+        const state = parse(await run('status'));
         if (state.error) throw new Error(state.error);
-        const apps = parseApps(appsText);
+        if (sequence !== loadSequence) return;
         els.rate.innerHTML = '<option value="auto">自动（最高档 ' + state.auto + 'Hz）</option>' + String(state.rates || '').split(' ').filter(Boolean).map(rate => '<option value="' + rate + '">' + rate + 'Hz</option>').join('');
         els.rate.value = state.selected || 'auto';
         els.current.textContent = state.current === 'unknown' ? '--' : state.current + 'Hz';
         els.auto.textContent = state.auto + 'Hz';
         els.rates.textContent = '系统档位：' + state.rates + 'Hz';
+        appState.selected = new Set(String(state.configured_apps || '').split(',').filter(Boolean));
+        els.rate.disabled = false; els.apply.disabled = false;
+        show('正在加载应用列表…');
+        const apps = parseApps(await run('apps'));
+        if (sequence !== loadSequence) return;
         appState.all = [...new Map(apps.apps.map(app => [app.packageName, app])).values()];
-        appState.selected = new Set(apps.configured.split(',').filter(Boolean));
         renderApps();
-        els.rate.disabled = false; els.apply.disabled = false; els.saveApps.disabled = false; show('已读取');
-      } catch (error) { show(error.message || '读取失败', true); }
+        els.saveApps.disabled = false;
+        show('已读取');
+      } catch (error) {
+        if (sequence !== loadSequence) return;
+        els.list.replaceChildren();
+        const empty = document.createElement('div');
+        empty.className = 'empty';
+        empty.textContent = '应用列表读取失败';
+        els.list.append(empty);
+        show(error.message || '读取失败', true);
+      } finally {
+        if (sequence === loadSequence) els.reload.disabled = false;
+      }
     }
 
     async function apply() {

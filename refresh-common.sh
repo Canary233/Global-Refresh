@@ -5,6 +5,7 @@ module_id=global_refresh
 scene_rate_jar="$MODDIR/bin/scene-rate.jar"
 scene_packages_file="$MODDIR/scene-packages.list"
 refresh_settings_file="$MODDIR/original-refresh-settings.conf"
+app_labels_cache_file="$MODDIR/app-labels.cache"
 
 log() {
     printf '%s\n' "global_refresh: $*"
@@ -130,7 +131,7 @@ write_default_config() {
     umask 022
     cat > "$config_file" <<'EOF'
 # 全局高刷配置
-# 版本：1.3.4
+# 版本：1.3.5
 # refresh_rate 可填写 auto 或整数帧率，例如 60、90、120。
 # auto 会自动选择当前最高分辨率下的最高可用帧率。
 refresh_rate=auto
@@ -263,15 +264,22 @@ is_high_refresh_app() {
     printf '%s\n' "$(read_high_refresh_apps)" | tr ',' '\n' | grep -qxF "$package_name"
 }
 
+list_installed_apps() {
+    cmd package list packages -3 2>/dev/null |
+        sed 's/^package://' |
+        awk '/^[A-Za-z0-9_]+(\.[A-Za-z0-9_]+)+$/' |
+        sort -u
+}
+
 list_high_refresh_apps() {
     {
         read_high_refresh_apps | tr ',' '\n'
-        cmd package list packages -3 2>/dev/null | sed 's/^package://'
+        list_installed_apps
     } | awk '/^[A-Za-z0-9_]+(\.[A-Za-z0-9_]+)+$/' | sort -u
 }
 
-list_high_refresh_app_labels() {
-    package_names=$(list_high_refresh_apps)
+resolve_app_labels() {
+    package_names="$1"
     [ -n "$package_names" ] || return 0
 
     if [ -r "$scene_rate_jar" ] && [ -x /system/bin/app_process ]; then
@@ -284,6 +292,50 @@ list_high_refresh_app_labels() {
 
     printf '%s\n' "$package_names" | while IFS= read -r package_name; do
         [ -n "$package_name" ] && printf '%s\t%s\n' "$package_name" "$package_name"
+    done
+}
+
+app_labels_cache_matches() {
+    package_names="$1"
+    [ -s "$app_labels_cache_file" ] || return 1
+
+    cached_packages=$(awk -F '\t' '{ print $1 }' "$app_labels_cache_file")
+    [ "$cached_packages" = "$package_names" ]
+}
+
+write_app_labels_cache() {
+    labels="$1"
+    cache_temp="$app_labels_cache_file.tmp.$$"
+
+    printf '%s\n' "$labels" > "$cache_temp" || return 1
+    chmod 0644 "$cache_temp" 2>/dev/null
+    mv -f "$cache_temp" "$app_labels_cache_file"
+}
+
+get_installed_app_labels() {
+    package_names=$(list_installed_apps)
+    [ -n "$package_names" ] || return 0
+
+    if app_labels_cache_matches "$package_names"; then
+        cat "$app_labels_cache_file"
+        return 0
+    fi
+
+    labels=$(resolve_app_labels "$package_names")
+    [ -n "$labels" ] || return 1
+    write_app_labels_cache "$labels" || log '无法写入应用名称缓存。'
+    printf '%s\n' "$labels"
+}
+
+list_high_refresh_app_labels() {
+    installed_labels=$(get_installed_app_labels) || return 1
+    printf '%s\n' "$installed_labels"
+
+    read_high_refresh_apps | tr ',' '\n' | while IFS= read -r package_name; do
+        [ -n "$package_name" ] || continue
+        if ! printf '%s\n' "$installed_labels" | awk -F '\t' -v package_name="$package_name" '$1 == package_name { found = 1 } END { exit !found }'; then
+            printf '%s\t%s\n' "$package_name" "$package_name"
+        fi
     done
 }
 
