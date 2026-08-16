@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <title>全局高刷</title>
+  <style>
+    :root { color-scheme: light dark; --bg: #f4f7fb; --panel: #ffffff; --ink: #152033; --muted: #64748b; --line: #dbe3ee; --accent: #0f766e; --accent-ink: #ffffff; --soft: #e6f4f1; --focus: #0b5cab; }
+    @media (prefers-color-scheme: dark) { :root { --bg: #10161e; --panel: #18212d; --ink: #edf4fb; --muted: #9aabba; --line: #2d3a49; --accent: #43c7b3; --accent-ink: #062c28; --soft: #1d3937; --focus: #8cc8ff; } }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; background: var(--bg); color: var(--ink); font: 15px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif; }
+    main { width: min(720px, 100%); margin: 0 auto; padding: 24px 18px 32px; }
+    header { display: flex; align-items: end; justify-content: space-between; gap: 16px; margin-bottom: 20px; }
+    h1 { margin: 0; font-size: 27px; letter-spacing: 0; }
+    .sub { margin: 4px 0 0; color: var(--muted); }
+    .status { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 12px; margin-bottom: 18px; }
+    .stat { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; }
+    .label { color: var(--muted); font-size: 13px; }
+    .value { margin-top: 3px; font-size: 22px; font-weight: 650; }
+    section { margin-top: 16px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 18px; }
+    .section-title { margin: 0 0 5px; font-size: 17px; }
+    .hint { color: var(--muted); margin: 0 0 15px; }
+    label { display: block; font-weight: 600; margin-bottom: 7px; }
+    select, input[type="search"] { width: 100%; min-height: 46px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--ink); padding: 0 12px; font: inherit; }
+    select:focus, input:focus, button:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+    .actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 17px; }
+    button { min-height: 42px; border: 1px solid var(--line); border-radius: 6px; background: transparent; color: var(--ink); padding: 0 16px; font: inherit; font-weight: 600; }
+    button.primary { border-color: var(--accent); background: var(--accent); color: var(--accent-ink); }
+    button:disabled { opacity: .55; }
+    #message { min-height: 24px; margin: 14px 2px 0; color: var(--muted); }
+    #message.error { color: #b42318; }
+    .rates, .selection-count { margin-top: 14px; color: var(--muted); font-size: 13px; }
+    .app-list { max-height: 340px; overflow: auto; margin-top: 12px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+    .app-row { display: flex; align-items: center; gap: 12px; min-height: 54px; margin: 0; padding: 8px 4px; border-bottom: 1px solid var(--line); cursor: pointer; font-weight: 400; }
+    .app-row:last-child { border-bottom: 0; }
+    .app-row input { width: 19px; height: 19px; flex: 0 0 auto; accent-color: var(--accent); }
+    .app-copy { min-width: 0; }
+    .app-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+    .app-package { overflow: hidden; color: var(--muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+    .empty { padding: 18px 4px; color: var(--muted); }
+    @media (max-width: 430px) { main { padding: 18px 14px 26px; } header { display: block; } .status { gap: 8px; } .stat { padding: 12px; } .value { font-size: 19px; } .actions { justify-content: stretch; } button { flex: 1; } }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div><h1>全局高刷</h1><p class="sub">选择需要锁定高刷的应用</p></div>
+    </header>
+    <div class="status">
+      <div class="stat"><div class="label">当前生效</div><div id="current" class="value">--</div></div>
+      <div class="stat"><div class="label">自动模式</div><div id="auto" class="value">--</div></div>
+    </div>
+    <section>
+      <h2 class="section-title">刷新率</h2>
+      <label for="rate">目标档位</label>
+      <select id="rate" disabled></select>
+      <div class="actions"><button id="reload" type="button">重新读取</button><button id="apply" class="primary" type="button" disabled>保存刷新率</button></div>
+      <div id="rates" class="rates"></div>
+    </section>
+    <section>
+      <h2 class="section-title">高刷应用</h2>
+      <label for="app-search">搜索应用</label>
+      <input id="app-search" type="search" autocomplete="off" placeholder="输入包名或应用简称">
+      <div id="selection-count" class="selection-count"></div>
+      <div id="app-list" class="app-list" aria-live="polite"></div>
+      <div class="actions"><button id="save-apps" class="primary" type="button" disabled>保存高刷应用</button></div>
+    </section>
+    <div id="message" role="status" aria-live="polite"></div>
+  </main>
+  <script>
+    const info = JSON.parse(window.ksu.moduleInfo());
+    const moduleDir = info.moduleDir;
+    const script = moduleDir + '/refresh-webui.sh';
+    const quote = value => "'" + String(value).replace(/'/g, "'\\''") + "'";
+    let commandSequence = 0;
+    const run = (...args) => new Promise((resolve, reject) => {
+      const callbackName = '__globalRefreshExec' + (++commandSequence);
+      const command = ['/system/bin/sh', script, ...args].map(quote).join(' ');
+      const timeout = window.setTimeout(() => {
+        delete window[callbackName];
+        reject(new Error('KernelSU 命令执行超时'));
+      }, 15000);
+      window[callbackName] = (errno, stdout, stderr) => {
+        window.clearTimeout(timeout);
+        delete window[callbackName];
+        if (Number(errno) !== 0) {
+          reject(new Error(String(stderr || stdout || ('命令执行失败（' + errno + '）')).trim()));
+          return;
+        }
+        resolve(String(stdout == null ? '' : stdout));
+      };
+      try { window.ksu.exec(command, JSON.stringify({}), callbackName); }
+      catch (error) { window.clearTimeout(timeout); delete window[callbackName]; reject(error); }
+    });
+
+    const els = {
+      rate: document.getElementById('rate'), current: document.getElementById('current'), auto: document.getElementById('auto'), rates: document.getElementById('rates'), message: document.getElementById('message'), apply: document.getElementById('apply'), reload: document.getElementById('reload'), search: document.getElementById('app-search'), list: document.getElementById('app-list'), count: document.getElementById('selection-count'), saveApps: document.getElementById('save-apps')
+    };
+    const appState = { all: [], selected: new Set() };
+    const parse = text => Object.fromEntries(String(text).trim().split(/\r?\n/).filter(line => line.includes('=')).map(line => { const i = line.indexOf('='); return [line.slice(0, i), line.slice(i + 1)]; }));
+    const parseApps = text => {
+      const lines = String(text).trim().split(/\r?\n/);
+      const configured = (lines.find(line => line.startsWith('configured_apps=')) || '').slice('configured_apps='.length);
+      return { configured, apps: lines.filter(line => line.startsWith('app=')).map(line => line.slice(4)) };
+    };
+    const show = (text, error = false) => { els.message.textContent = text; els.message.className = error ? 'error' : ''; };
+    const shortName = packageName => packageName.split('.').pop() || packageName;
+
+    function renderApps() {
+      const query = els.search.value.trim().toLowerCase();
+      const apps = appState.all.filter(packageName => packageName.toLowerCase().includes(query) || shortName(packageName).toLowerCase().includes(query));
+      els.list.replaceChildren();
+      if (!apps.length) {
+        const empty = document.createElement('div');
+        empty.className = 'empty';
+        empty.textContent = '未找到应用';
+        els.list.append(empty);
+      }
+      for (const packageName of apps) {
+        const row = document.createElement('label');
+        row.className = 'app-row';
+        const checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.checked = appState.selected.has(packageName);
+        checkbox.addEventListener('change', () => {
+          if (checkbox.checked) appState.selected.add(packageName);
+          else appState.selected.delete(packageName);
+          updateSelectionCount();
+        });
+        const copy = document.createElement('span');
+        copy.className = 'app-copy';
+        const name = document.createElement('span');
+        name.className = 'app-name';
+        name.textContent = shortName(packageName);
+        const packageText = document.createElement('span');
+        packageText.className = 'app-package';
+        packageText.textContent = packageName;
+        copy.append(name, packageText);
+        row.append(checkbox, copy);
+        els.list.append(row);
+      }
+      updateSelectionCount();
+    }
+
+    function updateSelectionCount() {
+      const count = appState.selected.size;
+      els.count.textContent = count ? '已选择 ' + count + ' 个应用' : '未选择应用';
+    }
+
+    async function load() {
+      els.rate.disabled = true; els.apply.disabled = true; els.saveApps.disabled = true; show('读取中…');
+      try {
+        const [stateText, appsText] = await Promise.all([run('status'), run('apps')]);
+        const state = parse(stateText);
+        if (state.error) throw new Error(state.error);
+        const apps = parseApps(appsText);
+        els.rate.innerHTML = '<option value="auto">自动（最高档 ' + state.auto + 'Hz）</option>' + String(state.rates || '').split(' ').filter(Boolean).map(rate => '<option value="' + rate + '">' + rate + 'Hz</option>').join('');
+        els.rate.value = state.selected || 'auto';
+        els.current.textContent = state.current === 'unknown' ? '--' : state.current + 'Hz';
+        els.auto.textContent = state.auto + 'Hz';
+        els.rates.textContent = '系统档位：' + state.rates + 'Hz';
+        appState.all = [...new Set(apps.apps)].sort((a, b) => a.localeCompare(b));
+        appState.selected = new Set(apps.configured.split(',').filter(Boolean));
+        renderApps();
+        els.rate.disabled = false; els.apply.disabled = false; els.saveApps.disabled = false; show('已读取');
+      } catch (error) { show(error.message || '读取失败', true); }
+    }
+
+    async function apply() {
+      els.apply.disabled = true; els.reload.disabled = true; show('保存中…');
+      try {
+        const result = parse(await run('apply', els.rate.value));
+        if (result.error || result.ok !== '1') throw new Error(result.error || '保存失败');
+        els.current.textContent = result.current === 'unknown' ? '--' : result.current + 'Hz';
+        show(result.locked === '1' ? '已应用到当前高刷应用' : '已保存，进入高刷应用后生效');
+      } catch (error) { show(error.message || '保存失败', true); }
+      finally { els.apply.disabled = false; els.reload.disabled = false; }
+    }
+
+    async function saveApps() {
+      els.saveApps.disabled = true; els.reload.disabled = true; show('保存中…');
+      try {
+        const result = parse(await run('setapps', [...appState.selected].sort().join(',')));
+        if (result.error || result.ok !== '1') throw new Error(result.error || '保存失败');
+        els.current.textContent = result.current === 'unknown' ? '--' : result.current + 'Hz';
+        show(result.locked === '1' ? '已保存并应用' : '已保存，选定应用进入前台后生效');
+      } catch (error) { show(error.message || '保存失败', true); }
+      finally { els.saveApps.disabled = false; els.reload.disabled = false; }
+    }
+
+    els.reload.addEventListener('click', load);
+    els.apply.addEventListener('click', apply);
+    els.saveApps.addEventListener('click', saveApps);
+    els.search.addEventListener('input', renderApps);
+    load();
+  </script>
+</body>
+</html>
