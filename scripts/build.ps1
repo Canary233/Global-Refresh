@@ -24,7 +24,7 @@ if (Test-Path -LiteralPath $archive) {
 
 $moduleEntries = @(
     'bin', 'src', 'webroot', 'customize.sh', 'global-refresh.sh', 'module.prop',
-    'refresh-common.sh', 'refresh-webui.sh', 'refresh.conf', 'service.sh', 'uninstall.sh'
+    'refresh-common.sh', 'refresh-webui.sh', 'refresh.conf.default', 'service.sh', 'uninstall.sh'
 ) | ForEach-Object { Join-Path $moduleRoot $_ }
 
 Compress-Archive -Path $moduleEntries -DestinationPath $archive -CompressionLevel Optimal

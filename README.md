@@ -22,6 +22,7 @@ high_refresh_apps=com.example.piliplus
 - `refresh_rate` 可以是 `auto` 或系统支持的整数档位。
 - `high_refresh_apps` 为逗号分隔的应用包名。留空时，模块不会锁定任何应用。
 - WebUI 会缓存系统应用名称；安装或卸载应用后会自动重新生成列表。
+- OTA 升级会保留已有的 `refresh.conf`，不会清空已选应用。
 
 ## OTA 更新
 

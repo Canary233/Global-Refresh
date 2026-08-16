@@ -129,9 +129,15 @@ get_current_refresh_rate() {
 
 write_default_config() {
     umask 022
+    if [ -s "$MODDIR/refresh.conf.default" ]; then
+        cp -f "$MODDIR/refresh.conf.default" "$config_file" || return 1
+        chmod 0644 "$config_file" 2>/dev/null
+        return 0
+    fi
+
     cat > "$config_file" <<'EOF'
 # 全局高刷配置
-# 版本：1.3.5
+# 版本：1.3.6
 # refresh_rate 可填写 auto 或整数帧率，例如 60、90、120。
 # auto 会自动选择当前最高分辨率下的最高可用帧率。
 refresh_rate=auto

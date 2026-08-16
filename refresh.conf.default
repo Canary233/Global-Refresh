@@ -7,5 +7,5 @@ refresh_rate=auto
 disable_idle_fps=true
 # 小米/HyperOS 视频场景策略；开启后视频应用不会请求回落到 60Hz。
 enable_scene_refresh_rate=true
-# 仅对配置的应用锁定高刷，多个包名用逗号分隔。留空即不锁定任何应用。
+# 仅对列出的包名锁定高刷，多个包名用逗号分隔。留空即不锁定任何应用。
 high_refresh_apps=
