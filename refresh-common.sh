@@ -130,7 +130,7 @@ write_default_config() {
     umask 022
     cat > "$config_file" <<'EOF'
 # 全局高刷配置
-# 版本：1.3.3
+# 版本：1.3.4
 # refresh_rate 可填写 auto 或整数帧率，例如 60、90、120。
 # auto 会自动选择当前最高分辨率下的最高可用帧率。
 refresh_rate=auto
@@ -268,6 +268,23 @@ list_high_refresh_apps() {
         read_high_refresh_apps | tr ',' '\n'
         cmd package list packages -3 2>/dev/null | sed 's/^package://'
     } | awk '/^[A-Za-z0-9_]+(\.[A-Za-z0-9_]+)+$/' | sort -u
+}
+
+list_high_refresh_app_labels() {
+    package_names=$(list_high_refresh_apps)
+    [ -n "$package_names" ] || return 0
+
+    if [ -r "$scene_rate_jar" ] && [ -x /system/bin/app_process ]; then
+        (
+            # Package names are validated by list_high_refresh_apps before word splitting.
+            set -- $package_names
+            CLASSPATH="$scene_rate_jar" /system/bin/app_process /system/bin SceneRate --labels "$@"
+        ) && return 0
+    fi
+
+    printf '%s\n' "$package_names" | while IFS= read -r package_name; do
+        [ -n "$package_name" ] && printf '%s\t%s\n' "$package_name" "$package_name"
+    done
 }
 
 get_foreground_package() {

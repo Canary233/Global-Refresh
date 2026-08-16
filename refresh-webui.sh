@@ -36,8 +36,10 @@ print_state() {
 
 print_apps() {
     printf 'configured_apps=%s\n' "$(read_high_refresh_apps)"
-    list_high_refresh_apps | while IFS= read -r package_name; do
-        printf 'app=%s\n' "$package_name"
+    list_high_refresh_app_labels | while IFS="$(printf '\t')" read -r package_name app_label; do
+        [ -n "$package_name" ] || continue
+        [ -n "$app_label" ] || app_label="$package_name"
+        printf 'app=%s\t%s\n' "$package_name" "$app_label"
     done
 }
 

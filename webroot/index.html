@@ -33,6 +33,7 @@
     .app-list { max-height: 340px; overflow: auto; margin-top: 12px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
     .app-row { display: flex; align-items: center; gap: 12px; min-height: 54px; margin: 0; padding: 8px 4px; border-bottom: 1px solid var(--line); cursor: pointer; font-weight: 400; }
     .app-row:last-child { border-bottom: 0; }
+    .app-row.selected { background: var(--soft); }
     .app-row input { width: 19px; height: 19px; flex: 0 0 auto; accent-color: var(--accent); }
     .app-copy { min-width: 0; }
     .app-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
@@ -60,7 +61,7 @@
     <section>
       <h2 class="section-title">高刷应用</h2>
       <label for="app-search">搜索应用</label>
-      <input id="app-search" type="search" autocomplete="off" placeholder="输入包名或应用简称">
+      <input id="app-search" type="search" autocomplete="off" placeholder="输入应用名称或包名">
       <div id="selection-count" class="selection-count"></div>
       <div id="app-list" class="app-list" aria-live="polite"></div>
       <div class="actions"><button id="save-apps" class="primary" type="button" disabled>保存高刷应用</button></div>
@@ -98,17 +99,28 @@
     };
     const appState = { all: [], selected: new Set() };
     const parse = text => Object.fromEntries(String(text).trim().split(/\r?\n/).filter(line => line.includes('=')).map(line => { const i = line.indexOf('='); return [line.slice(0, i), line.slice(i + 1)]; }));
+    const show = (text, error = false) => { els.message.textContent = text; els.message.className = error ? 'error' : ''; };
+    const shortName = packageName => packageName.split('.').pop() || packageName;
     const parseApps = text => {
       const lines = String(text).trim().split(/\r?\n/);
       const configured = (lines.find(line => line.startsWith('configured_apps=')) || '').slice('configured_apps='.length);
-      return { configured, apps: lines.filter(line => line.startsWith('app=')).map(line => line.slice(4)) };
+      const apps = lines.filter(line => line.startsWith('app=')).map(line => {
+        const record = line.slice(4);
+        const separator = record.indexOf('\t');
+        const packageName = separator < 0 ? record : record.slice(0, separator);
+        const label = separator < 0 ? '' : record.slice(separator + 1).trim();
+        return { packageName, label: label || shortName(packageName) };
+      }).filter(app => app.packageName);
+      return { configured, apps };
     };
-    const show = (text, error = false) => { els.message.textContent = text; els.message.className = error ? 'error' : ''; };
-    const shortName = packageName => packageName.split('.').pop() || packageName;
 
     function renderApps() {
       const query = els.search.value.trim().toLowerCase();
-      const apps = appState.all.filter(packageName => packageName.toLowerCase().includes(query) || shortName(packageName).toLowerCase().includes(query));
+      const apps = appState.all.filter(app => app.packageName.toLowerCase().includes(query) || app.label.toLowerCase().includes(query)).sort((left, right) => {
+        const selectionDifference = Number(appState.selected.has(right.packageName)) - Number(appState.selected.has(left.packageName));
+        if (selectionDifference) return selectionDifference;
+        return left.label.localeCompare(right.label, 'zh-Hans-CN') || left.packageName.localeCompare(right.packageName);
+      });
       els.list.replaceChildren();
       if (!apps.length) {
         const empty = document.createElement('div');
@@ -116,22 +128,23 @@
         empty.textContent = '未找到应用';
         els.list.append(empty);
       }
-      for (const packageName of apps) {
+      for (const app of apps) {
+        const packageName = app.packageName;
         const row = document.createElement('label');
-        row.className = 'app-row';
+        row.className = 'app-row' + (appState.selected.has(packageName) ? ' selected' : '');
         const checkbox = document.createElement('input');
         checkbox.type = 'checkbox';
         checkbox.checked = appState.selected.has(packageName);
         checkbox.addEventListener('change', () => {
           if (checkbox.checked) appState.selected.add(packageName);
           else appState.selected.delete(packageName);
-          updateSelectionCount();
+          renderApps();
         });
         const copy = document.createElement('span');
         copy.className = 'app-copy';
         const name = document.createElement('span');
         name.className = 'app-name';
-        name.textContent = shortName(packageName);
+        name.textContent = app.label;
         const packageText = document.createElement('span');
         packageText.className = 'app-package';
         packageText.textContent = packageName;
@@ -159,7 +172,7 @@
         els.current.textContent = state.current === 'unknown' ? '--' : state.current + 'Hz';
         els.auto.textContent = state.auto + 'Hz';
         els.rates.textContent = '系统档位：' + state.rates + 'Hz';
-        appState.all = [...new Set(apps.apps)].sort((a, b) => a.localeCompare(b));
+        appState.all = [...new Map(apps.apps.map(app => [app.packageName, app])).values()];
         appState.selected = new Set(apps.configured.split(',').filter(Boolean));
         renderApps();
         els.rate.disabled = false; els.apply.disabled = false; els.saveApps.disabled = false; show('已读取');
