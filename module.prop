@@ -1,7 +1,7 @@
 id=global_refresh
 name=全局高刷
-version=1.4.0
-versionCode=10400
+version=1.4.1
+versionCode=10401
 author=Canary233
 description=打开 WebUI 可配置刷新率
 updateJson=https://raw.githubusercontent.com/Canary233/global-refresh/main/update.json

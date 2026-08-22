@@ -199,6 +199,7 @@
     function syncMode() {
       const enabled = state.globalEnabled;
       els.globalEnabled.checked = enabled;
+      els.globalEnabled.disabled = !state.ready;
       els.appsSection.hidden = enabled;
       els.rate.disabled = !state.ready || !enabled;
       els.saveGlobal.disabled = !state.ready || !enabled;
