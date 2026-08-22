@@ -1,5 +1,7 @@
 # 全局高刷配置
-# 版本：1.3.6
+# 版本：1.4.0
+# 开启后全局锁定 refresh_rate；关闭后按 app_refresh_rates 为应用单独锁定。
+global_refresh_enabled=false
 # refresh_rate 可填写 auto 或整数帧率，例如 60、90、120。
 # auto 会自动选择当前最高分辨率下的最高可用帧率。
 refresh_rate=auto
@@ -7,5 +9,5 @@ refresh_rate=auto
 disable_idle_fps=true
 # 小米/HyperOS 视频场景策略；开启后视频应用不会请求回落到 60Hz。
 enable_scene_refresh_rate=true
-# 仅对列出的包名锁定高刷，多个包名用逗号分隔。留空即不锁定任何应用。
-high_refresh_apps=
+# 应用和目标刷新率，格式为 包名=档位，多个应用用逗号分隔。留空即不锁定任何应用。
+app_refresh_rates=

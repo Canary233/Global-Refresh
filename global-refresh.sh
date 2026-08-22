@@ -21,7 +21,7 @@ release_lock_if_needed() {
     release_high_refresh_lock
     lock_active=false
     last_scene_key=
-    log '当前应用未配置高刷，已释放刷新率锁定。'
+    log '高刷锁定已释放。'
 }
 
 # Remove scene entries left by an earlier service instance before enforcing the current selection.
@@ -30,13 +30,28 @@ restore_user_refresh_rate
 setprop persist.vendor.disable_idle_fps false
 
 while true; do
-    foreground_package=$(get_foreground_package)
-    if ! is_high_refresh_app "$foreground_package"; then
-        release_lock_if_needed
-        current_rate=$(get_current_refresh_rate)
-        [ -n "$current_rate" ] && update_description_if_needed "$current_rate"
-        sleep "$poll_seconds"
+    if [ ! -s "$config_file" ] && ! write_default_config; then
+        log "无法写入配置文件：$config_file"
+        sleep 3
         continue
+    fi
+
+    global_enabled=$(read_global_refresh_enabled)
+    foreground_package=
+    if [ "$global_enabled" = true ]; then
+        requested_rate=$(read_configured_rate)
+        lock_scope=global
+    else
+        foreground_package=$(get_foreground_package)
+        requested_rate=$(get_configured_app_rate "$foreground_package")
+        if [ -z "$requested_rate" ]; then
+            release_lock_if_needed
+            current_rate=$(get_current_refresh_rate)
+            [ -n "$current_rate" ] && update_description_if_needed "$current_rate"
+            sleep "$poll_seconds"
+            continue
+        fi
+        lock_scope=application
     fi
 
     modes=$(get_display_modes)
@@ -54,15 +69,8 @@ while true; do
         continue
     fi
 
-    if [ ! -s "$config_file" ] && ! write_default_config; then
-        log "无法写入配置文件：$config_file"
-        sleep 3
-        continue
-    fi
-
-    requested_rate=$(read_configured_rate)
     if ! target_rate=$(resolve_target_rate "$requested_rate" "$default_rate"); then
-        log "配置 refresh_rate=$requested_rate 无效；请使用 auto 或整数帧率。"
+        log "配置刷新率 $requested_rate 无效；请使用 auto 或系统支持的整数档位。"
         sleep 3
         continue
     fi
@@ -80,11 +88,19 @@ while true; do
     apply_user_refresh_rate "$target_rate"
     lock_active=true
 
-    scene_key="${foreground_package}:${target_rate}"
-    if [ "$scene_key" != "$last_scene_key" ]; then
-        if register_scene_refresh_rate "$foreground_package" "$target_rate"; then
-            last_scene_key="$scene_key"
-            log "已为配置的应用 $foreground_package 登记 ${target_rate}Hz 场景策略"
+    if [ "$lock_scope" = global ]; then
+        if [ "$last_scene_key" != global ]; then
+            clear_registered_scene_refresh_rates
+            last_scene_key=global
+            log "已全局锁定 ${target_rate}Hz"
+        fi
+    else
+        scene_key="${foreground_package}:${target_rate}"
+        if [ "$scene_key" != "$last_scene_key" ]; then
+            if register_scene_refresh_rate "$foreground_package" "$target_rate"; then
+                last_scene_key="$scene_key"
+                log "已为配置的应用 $foreground_package 登记 ${target_rate}Hz 场景策略"
+            fi
         fi
     fi
 

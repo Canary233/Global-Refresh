@@ -31,16 +31,29 @@ print_state() {
     printf 'auto=%s\n' "$auto_rate"
     printf 'current=%s\n' "$current"
     printf 'width=%s\n' "$max_width"
-    printf 'configured_apps=%s\n' "$(read_high_refresh_apps)"
+    printf 'global_enabled=%s\n' "$(read_global_refresh_enabled)"
 }
 
 print_apps() {
-    printf 'configured_apps=%s\n' "$(read_high_refresh_apps)"
-    list_high_refresh_app_labels | while IFS="$(printf '\t')" read -r package_name app_label; do
-        [ -n "$package_name" ] || continue
-        [ -n "$app_label" ] || app_label="$package_name"
-        printf 'app=%s\t%s\n' "$package_name" "$app_label"
-    done
+    configured_rates=$(list_configured_app_rates | awk '
+        { output = output == "" ? $0 : output "," $0 }
+        END { print output }
+    ')
+    printf 'configured_rates=%s\n' "$configured_rates"
+    list_high_refresh_app_labels | awk -F '\t' -v configured_rates="$configured_rates" '
+        BEGIN {
+            count = split(configured_rates, records, ",")
+            for (position = 1; position <= count; position++) {
+                split(records[position], fields, "=")
+                if (fields[1] != "") rates[fields[1]] = fields[2]
+            }
+        }
+        {
+            package_name = $1
+            label = $2
+            if (package_name != "") print "app=" package_name "\t" label "\t" rates[package_name]
+        }
+    '
 }
 
 prepare_target_rate() {
@@ -73,66 +86,115 @@ prepare_target_rate() {
     fi
 }
 
-apply_current_application_lock() {
-    target_rate="$1"
-    mode_id="$2"
-    foreground_package=$(get_foreground_package)
-    locked=0
-
-    if is_high_refresh_app "$foreground_package"; then
-        capture_original_refresh_settings
-        apply_idle_fps_policy
-        apply_user_refresh_rate "$target_rate"
-        register_scene_refresh_rate "$foreground_package" "$target_rate" || true
-        force_display_mode "$mode_id" || return 1
-        locked=1
-    else
-        release_high_refresh_lock
-    fi
-
-    sleep 0.2
+read_current_rate() {
     current=$(get_current_refresh_rate)
     [ -n "$current" ] || current=unknown
 }
 
-apply_rate() {
-    requested=$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')
-    prepare_target_rate "$requested" || return 1
-    if ! write_configured_rate "$requested"; then
-        printf '%s\n' 'error=无法写入 refresh.conf'
-        return 1
-    fi
-    if ! apply_current_application_lock "$target_rate" "$mode_id"; then
-        printf 'error=应用 %sHz 失败，已保存配置\n' "$target_rate"
-        return 1
-    fi
-
-    update_module_description "当前刷新率：${current}Hz"
-    printf 'ok=1\nrequested=%s\ntarget=%s\ncurrent=%s\nlocked=%s\n' "$requested" "$target_rate" "$current" "$locked"
+apply_global_lock() {
+    capture_original_refresh_settings
+    apply_idle_fps_policy
+    clear_registered_scene_refresh_rates
+    apply_user_refresh_rate "$target_rate"
+    force_display_mode "$mode_id" || return 1
+    sleep 0.2
+    read_current_rate
+    locked=1
 }
 
-save_apps() {
-    if ! write_high_refresh_apps "$1"; then
+apply_current_application_lock() {
+    foreground_package=$(get_foreground_package)
+    requested=$(get_configured_app_rate "$foreground_package")
+    locked=0
+
+    if [ -z "$requested" ]; then
+        release_high_refresh_lock
+        read_current_rate
+        return 0
+    fi
+
+    prepare_target_rate "$requested" || return 1
+    capture_original_refresh_settings
+    apply_idle_fps_policy
+    apply_user_refresh_rate "$target_rate"
+    register_scene_refresh_rate "$foreground_package" "$target_rate" || true
+    force_display_mode "$mode_id" || return 1
+    sleep 0.2
+    read_current_rate
+    locked=1
+}
+
+set_global() {
+    enabled="$1"
+    requested=$(printf '%s' "$2" | tr '[:upper:]' '[:lower:]')
+    case "$enabled" in
+        true|false) ;;
+        *) printf '%s\n' 'error=全局高刷开关无效'; return 1 ;;
+    esac
+
+    prepare_target_rate "$requested" || return 1
+    if ! write_configured_rate "$requested" || ! write_global_refresh_enabled "$enabled"; then
         printf '%s\n' 'error=无法写入 refresh.conf'
         return 1
     fi
 
-    requested=$(read_configured_rate)
-    requested=${requested:-auto}
-    prepare_target_rate "$requested" || return 1
-    if ! apply_current_application_lock "$target_rate" "$mode_id"; then
-        printf '%s\n' 'error=应用应用选择失败'
+    if [ "$enabled" = true ]; then
+        if ! apply_global_lock; then
+            printf 'error=应用全局 %sHz 失败，已保存配置\n' "$target_rate"
+            return 1
+        fi
+        message="已全局锁定 ${target_rate}Hz"
+    else
+        if ! apply_current_application_lock; then
+            printf '%s\n' 'error=关闭全局高刷后无法应用当前应用配置'
+            return 1
+        fi
+        message='已关闭全局高刷，可配置每个应用的刷新率'
+    fi
+
+    update_module_description "当前刷新率：${current}Hz"
+    printf 'ok=1\nglobal_enabled=%s\nrequested=%s\ntarget=%s\ncurrent=%s\nlocked=%s\nmessage=%s\n' "$enabled" "$requested" "$target_rate" "$current" "$locked" "$message"
+}
+
+validate_app_rates() {
+    app_rates=$(normalize_app_refresh_rates "$1")
+    old_ifs=$IFS
+    IFS=,
+    for record in $app_rates; do
+        rate=${record#*=}
+        prepare_target_rate "$rate" || {
+            IFS=$old_ifs
+            return 1
+        }
+    done
+    IFS=$old_ifs
+}
+
+save_app_rates() {
+    if [ "$(read_global_refresh_enabled)" = true ]; then
+        printf '%s\n' 'error=请先关闭全局高刷，再配置应用刷新率'
+        return 1
+    fi
+
+    validate_app_rates "$1" || return 1
+    if ! write_app_refresh_rates "$app_rates"; then
+        printf '%s\n' 'error=无法写入 refresh.conf'
+        return 1
+    fi
+
+    if ! apply_current_application_lock; then
+        printf '%s\n' 'error=应用当前应用配置失败，已保存设置'
         return 1
     fi
 
     update_module_description "当前刷新率：${current}Hz"
-    printf 'ok=1\napps=%s\ncurrent=%s\nlocked=%s\n' "$(read_high_refresh_apps)" "$current" "$locked"
+    printf 'ok=1\nrates=%s\ncurrent=%s\nlocked=%s\n' "$app_rates" "$current" "$locked"
 }
 
 case "$1" in
     status|'') print_state ;;
     apps) print_apps ;;
-    apply) apply_rate "$2" ;;
-    setapps) save_apps "$2" ;;
+    setglobal) set_global "$2" "$3" ;;
+    setapps) save_app_rates "$2" ;;
     *) printf '%s\n' 'error=未知操作' ; exit 1 ;;
 esac

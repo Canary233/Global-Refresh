@@ -137,7 +137,9 @@ write_default_config() {
 
     cat > "$config_file" <<'EOF'
 # 全局高刷配置
-# 版本：1.3.6
+# 版本：1.4.0
+# 开启后全局锁定 refresh_rate；关闭后按 app_refresh_rates 为应用单独锁定。
+global_refresh_enabled=false
 # refresh_rate 可填写 auto 或整数帧率，例如 60、90、120。
 # auto 会自动选择当前最高分辨率下的最高可用帧率。
 refresh_rate=auto
@@ -145,35 +147,40 @@ refresh_rate=auto
 disable_idle_fps=true
 # 在小米/HyperOS 上使用系统场景策略压过视频应用的 60Hz 请求。
 enable_scene_refresh_rate=true
-# 仅对列出的包名锁定高刷，多个包名用逗号分隔。留空即不锁定任何应用。
-high_refresh_apps=
+# 应用和目标刷新率，格式为 包名=档位，多个应用用逗号分隔。留空即不锁定任何应用。
+app_refresh_rates=
 EOF
     chmod 0644 "$config_file" 2>/dev/null
 }
 
-write_configured_rate() {
-    rate="$1"
+write_config_value() {
+    key="$1"
+    value="$2"
     temp_file="$config_file.tmp.$$"
 
     if [ ! -s "$config_file" ]; then
         write_default_config || return 1
     fi
 
-    awk -v rate="$rate" '
+    awk -v key="$key" -v value="$value" '
         BEGIN { replaced = 0 }
-        /^[[:space:]]*refresh_rate[[:space:]]*=/ {
-            print "refresh_rate=" rate
+        $0 ~ "^[[:space:]]*" key "[[:space:]]*=" {
+            print key "=" value
             replaced = 1
             next
         }
         { print }
-        END { if (!replaced) print "refresh_rate=" rate }
+        END { if (!replaced) print key "=" value }
     ' "$config_file" > "$temp_file" || {
         rm -f "$temp_file"
         return 1
     }
     chmod 0644 "$temp_file" 2>/dev/null
     mv -f "$temp_file" "$config_file"
+}
+
+write_configured_rate() {
+    write_config_value refresh_rate "$1"
 }
 
 read_configured_rate() {
@@ -186,6 +193,31 @@ read_configured_rate() {
             exit
         }
     ' "$config_file" 2>/dev/null | tr '[:upper:]' '[:lower:]'
+}
+
+read_global_refresh_enabled() {
+    value=$(awk -F '=' '
+        /^[[:space:]]*global_refresh_enabled[[:space:]]*=/ {
+            value = $2
+            gsub(/^[[:space:]]+/, "", value)
+            gsub(/[[:space:]]+$/, "", value)
+            print value
+            exit
+        }
+    ' "$config_file" 2>/dev/null | tr '[:upper:]' '[:lower:]')
+
+    case "$value" in
+        true|1|yes|on) printf '%s\n' true ;;
+        *) printf '%s\n' false ;;
+    esac
+}
+
+write_global_refresh_enabled() {
+    case "$1" in
+        true|1|yes|on) write_config_value global_refresh_enabled true ;;
+        false|0|no|off) write_config_value global_refresh_enabled false ;;
+        *) return 1 ;;
+    esac
 }
 
 read_disable_idle_fps() {
@@ -239,27 +271,91 @@ normalize_high_refresh_apps() {
 
 write_high_refresh_apps() {
     apps=$(normalize_high_refresh_apps "$1")
-    temp_file="$config_file.tmp.$$"
+    requested_rate=$(read_configured_rate)
+    case "$requested_rate" in
+        ''|*[!0-9]*) requested_rate=auto ;;
+    esac
+    app_rates=$(printf '%s\n' "$apps" | tr ',' '\n' | awk -v rate="$requested_rate" '
+        NF { output = output == "" ? $0 "=" rate : output "," $0 "=" rate }
+        END { print output }
+    ')
+    write_app_refresh_rates "$app_rates"
+}
 
-    if [ ! -s "$config_file" ]; then
-        write_default_config || return 1
-    fi
-
-    awk -v apps="$apps" '
-        BEGIN { replaced = 0 }
-        /^[[:space:]]*high_refresh_apps[[:space:]]*=/ {
-            print "high_refresh_apps=" apps
-            replaced = 1
-            next
+read_app_refresh_rates() {
+    awk '
+        /^[[:space:]]*app_refresh_rates[[:space:]]*=/ {
+            value = $0
+            sub(/^[^=]*=/, "", value)
+            gsub(/^[[:space:]]+/, "", value)
+            gsub(/[[:space:]]+$/, "", value)
+            print value
+            exit
         }
-        { print }
-        END { if (!replaced) print "high_refresh_apps=" apps }
-    ' "$config_file" > "$temp_file" || {
-        rm -f "$temp_file"
-        return 1
-    }
-    chmod 0644 "$temp_file" 2>/dev/null
-    mv -f "$temp_file" "$config_file"
+    ' "$config_file" 2>/dev/null
+}
+
+normalize_app_refresh_rates() {
+    printf '%s' "$1" | tr ',' '\n' | awk '
+        {
+            gsub(/^[[:space:]]+/, "")
+            gsub(/[[:space:]]+$/, "")
+            count = split($0, fields, "=")
+            package_name = fields[1]
+            rate = tolower(fields[2])
+            if (count == 2 && package_name ~ /^[A-Za-z0-9_]+(\.[A-Za-z0-9_]+)+$/ && rate ~ /^(auto|[0-9]+)$/ && !seen[package_name]++) {
+                output = output == "" ? package_name "=" rate : output "," package_name "=" rate
+            }
+        }
+        END { print output }
+    '
+}
+
+# Legacy high_refresh_apps entries are retained as the prior shared refresh_rate
+# until WebUI saves the new per-application format.
+list_configured_app_rates() {
+    legacy_rate=$(read_configured_rate)
+    case "$legacy_rate" in
+        ''|*[!0-9]*) legacy_rate=auto ;;
+    esac
+
+    {
+        read_app_refresh_rates | tr ',' '\n'
+        read_high_refresh_apps | tr ',' '\n' | awk -v rate="$legacy_rate" '
+            /^[A-Za-z0-9_]+(\.[A-Za-z0-9_]+)+$/ { print $0 "=" rate }
+        '
+    } | awk '
+        {
+            count = split($0, fields, "=")
+            package_name = fields[1]
+            rate = tolower(fields[2])
+            if (count == 2 && package_name ~ /^[A-Za-z0-9_]+(\.[A-Za-z0-9_]+)+$/ && rate ~ /^(auto|[0-9]+)$/ && !seen[package_name]++) {
+                order[++record_count] = package_name
+                values[package_name] = rate
+            }
+        }
+        END {
+            for (position = 1; position <= record_count; position++) {
+                package_name = order[position]
+                print package_name "=" values[package_name]
+            }
+        }
+    '
+}
+
+get_configured_app_rate() {
+    package_name="$1"
+    case "$package_name" in
+        ''|*[!A-Za-z0-9_.]*) return 1 ;;
+    esac
+    list_configured_app_rates | awk -F '=' -v package_name="$package_name" '$1 == package_name { print $2; exit }'
+}
+
+write_app_refresh_rates() {
+    app_rates=$(normalize_app_refresh_rates "$1")
+    write_config_value app_refresh_rates "$app_rates" || return 1
+    # Clear the legacy list once the new mapping has been saved, allowing users to remove old entries.
+    write_config_value high_refresh_apps ''
 }
 
 is_high_refresh_app() {
@@ -267,7 +363,7 @@ is_high_refresh_app() {
     case "$package_name" in
         ''|*[!A-Za-z0-9_.]*) return 1 ;;
     esac
-    printf '%s\n' "$(read_high_refresh_apps)" | tr ',' '\n' | grep -qxF "$package_name"
+    [ -n "$(get_configured_app_rate "$package_name")" ]
 }
 
 list_installed_apps() {
@@ -279,7 +375,7 @@ list_installed_apps() {
 
 list_high_refresh_apps() {
     {
-        read_high_refresh_apps | tr ',' '\n'
+        list_configured_app_rates | awk -F '=' '{ print $1 }'
         list_installed_apps
     } | awk '/^[A-Za-z0-9_]+(\.[A-Za-z0-9_]+)+$/' | sort -u
 }
@@ -337,7 +433,7 @@ list_high_refresh_app_labels() {
     installed_labels=$(get_installed_app_labels) || return 1
     printf '%s\n' "$installed_labels"
 
-    read_high_refresh_apps | tr ',' '\n' | while IFS= read -r package_name; do
+    list_configured_app_rates | awk -F '=' '{ print $1 }' | while IFS= read -r package_name; do
         [ -n "$package_name" ] || continue
         if ! printf '%s\n' "$installed_labels" | awk -F '\t' -v package_name="$package_name" '$1 == package_name { found = 1 } END { exit !found }'; then
             printf '%s\t%s\n' "$package_name" "$package_name"
